@@ -1,40 +1,50 @@
 package wrouter
 
 import (
-	"reflect"
-	"net/http"
-	"io"
-	"strings"
 	"fmt"
+	"io"
+	"net/http"
+	"reflect"
 	"strconv"
+	"strings"
 )
 
+// Route represents one callable route
 type Route struct {
-	Methods []string
+	Methods    []string
 	Controller interface{}
-	RMethod reflect.Method
-	Path string
+	RMethod    reflect.Method
+	Path       string
 }
 
+// Add an HTTP Method to the routes
+// Allowed methods: "get", "post", "put", "patch", "head", "trace", "connect", "options"
 func (r *Route) AddMethod(method string) {
 	r.Methods = append(r.Methods, method)
 }
 
+// Router represents one implementation of the http.Handler interface
 type Router struct {
-	routes []*Route
-	injectors []Injector
-	preRequest []PreRequestEvent
+	routes      []*Route
+	injectors   []Injector
+	preRequest  []PreRequestEvent
 	postRequest []PostRequestEvent
 }
 
+// Create a new Router
 func NewRouter() *Router {
 	return &Router{}
 }
 
+// ServeHTTP satisfies the http.Handler interface, so that this Router can be used as the
+// second parameter of http.ListenAndServe
 func (r *Router) ServeHTTP(w http.ResponseWriter, h *http.Request) {
+
+	// Execute PreRequestEvents if any
 	if len(r.preRequest) != 0 {
+		ctx := createPreRequestEventContext(h, w)
 		for _, event := range r.preRequest {
-			event.Exec(h, w)
+			event.Exec(ctx)
 		}
 	}
 
@@ -50,6 +60,8 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, h *http.Request) {
 	r.callRoute(route, w, h)
 }
 
+// PrintRoutes will print out all routes to io.Writer
+// @TODO: Print alias for *Index* Routes
 func (r *Router) PrintRoutes(writer io.Writer) {
 	for i, route := range r.routes {
 		ms := ""
@@ -60,6 +72,7 @@ func (r *Router) PrintRoutes(writer io.Writer) {
 	}
 }
 
+// AddController will add a new controller to the router
 func (r *Router) AddController(controller interface{}) {
 	rc := reflect.TypeOf(controller)
 	verifyController(rc)
@@ -146,8 +159,9 @@ func (r *Router) callRoute(route *Route, w http.ResponseWriter, h *http.Request)
 
 	// Execute PostRequest events
 	if len(r.postRequest) != 0 {
+		ctx := createPostRequestEventContext(h, w, ret)
 		for _, event := range r.postRequest {
-			event.Exec(h, w, ret)
+			event.Exec(ctx)
 		}
 	}
 }
@@ -164,14 +178,11 @@ func (r *Router) inject(t string, ctx *InjectorContext) interface{} {
 	return nil
 }
 
-
-
 /********
  *
  *	HELPER FUNCTIONS
  *
  ********/
-
 func createRouteByMethod(controller interface{}, rc reflect.Type, method reflect.Method) *Route {
 	r := new(Route)
 	methodName := strings.ToLower(method.Name)

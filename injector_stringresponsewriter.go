@@ -5,12 +5,11 @@ import (
 	"reflect"
 )
 
-
 // Injector example. Wrapper to directly write strings to the http.ResponseWriter
 // instead of using byte-arrays. This is not injected by default.
 // if you want to inject the StringResponseWriter, use the AddInjector method of your
 // router instance
-type StringResponseWriterInjector struct {}
+type StringResponseWriterInjector struct{}
 
 func (s *StringResponseWriterInjector) Supports(t string) bool {
 	v := reflect.TypeOf(s)
@@ -23,7 +22,6 @@ func (s *StringResponseWriterInjector) Get(ctx *InjectorContext) interface{} {
 		writer: ctx.ResponseWriter,
 	}
 }
-
 
 // StringResponseWriter is a wrapper for http.ResponseWriter, which writes strings
 // instead of []byte
@@ -53,4 +51,3 @@ func (w *StringResponseWriter) Write(str string) (int, error) {
 func (w *StringResponseWriter) WriteHeader(h int) {
 	w.writer.WriteHeader(h)
 }
-
