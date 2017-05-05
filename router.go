@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"errors"
 )
 
 // Route represents one callable route
@@ -18,7 +19,7 @@ type Route struct {
 }
 
 // Add an HTTP Method to the routes
-// Allowed methods: "get", "post", "put", "patch", "head", "trace", "connect", "options"
+// Allowed methods: "get", "post", "put", "patch", "head", "trace", "connect", "options", "delete"
 func (r *Route) AddMethod(method string) {
 	r.Methods = append(r.Methods, method)
 }
@@ -74,13 +75,7 @@ func (r *Router) PrintRoutes(writer io.Writer) {
 
 // AddController will add a new controller to the router
 func (r *Router) AddController(controller interface{}) {
-	rc := reflect.TypeOf(controller)
-	verifyController(rc)
-
-	for i := 0; i < rc.NumMethod(); i++ {
-		route := createRouteByMethod(controller, rc, rc.Method(i))
-		r.AddRoute(route)
-	}
+	r.addController(controller, "")
 }
 
 func (r *Router) AddRoute(route *Route) {
@@ -103,11 +98,12 @@ func (r *Router) findRequestRoute(h *http.Request) *Route {
 	uri := strings.ToLower(strings.Trim(h.URL.RequestURI(), "?&/"))
 	uriParts := strings.Split(uri, "/")
 
+
+	// TODO: Find a nicer and more generic way to determine index-actions
 	// use "IndexController" if no route is specified
 	if uriParts[0] == "" {
 		uriParts[0] = "index"
 	}
-
 	// append index action to general controller call
 	if len(uriParts) < 2 {
 		uriParts = append(uriParts, "index")
@@ -178,12 +174,51 @@ func (r *Router) inject(t string, ctx *InjectorContext) interface{} {
 	return nil
 }
 
+func (r *Router) addController(controller interface{}, prefix string) {
+	rc := reflect.TypeOf(controller)
+	vErr := verifyController(rc)
+	if vErr != nil {
+		panic(vErr.Error())
+	}
+
+	for i := 0; i < rc.NumMethod(); i++ {
+		route := createRouteByMethod(controller, rc, rc.Method(i), prefix)
+		r.AddRoute(route)
+	}
+
+	subControllers := r.getSubControllers(rc)
+	if len(subControllers) != 0 {
+		newPrefix := prefix + controllerPath(controller) + "/"
+		for _, c := range subControllers {
+			r.addController(c, newPrefix)
+		}
+	}
+}
+
+func (r *Router) getSubControllers(rc reflect.Type) []interface{} {
+	var controllers []interface{}
+	fn := rc.Elem().NumField()
+	if fn == 0 {
+		return controllers
+	}
+	for i := 0; i < fn; i++ {
+		rf := rc.Elem().Field(i).Type
+		c := verifyController(rf)
+		if c == nil {
+			r := reflect.New(rf.Elem())
+			controllers = append(controllers, r.Interface())
+		}
+	}
+
+	return controllers
+}
+
 /********
  *
  *	HELPER FUNCTIONS
  *
  ********/
-func createRouteByMethod(controller interface{}, rc reflect.Type, method reflect.Method) *Route {
+func createRouteByMethod(controller interface{}, rc reflect.Type, method reflect.Method, prefix string) *Route {
 	r := new(Route)
 	methodName := strings.ToLower(method.Name)
 	r.Controller = controller
@@ -192,7 +227,7 @@ func createRouteByMethod(controller interface{}, rc reflect.Type, method reflect
 	// Add HTTP methods
 	if strings.Contains(methodName, "_") {
 		var allowed []string = []string{"get", "post", "put", "patch", "head", "trace",
-			"connect", "options"}
+			"connect", "options", "delete"}
 		methodParts := strings.Split(methodName, "_")
 		methodString := methodParts[0]
 		methodName = methodParts[1]
@@ -210,16 +245,22 @@ func createRouteByMethod(controller interface{}, rc reflect.Type, method reflect
 	if strings.Contains(methodName, "action") {
 		methodName = strings.Replace(methodName, "action", "", -1)
 	}
-	r.Path = strings.Replace(strings.ToLower(rc.Elem().Name()), "controller", "", -1) + "/" + methodName
+	r.Path = prefix + strings.Replace(strings.ToLower(rc.Elem().Name()), "controller", "", -1) + "/" + methodName
 	return r
 }
 
-func verifyController(rc reflect.Type) {
+func verifyController(rc reflect.Type) error {
 	if rc.Kind() != reflect.Ptr || rc.Elem().Kind() != reflect.Struct {
-		panic(rc.String() + " is a " + rc.Kind().String() + ", pointer to Struct expected")
+		return errors.New(rc.String() + " is a " + rc.Kind().String() + ", pointer to Struct expected")
 	}
 
 	if !strings.Contains(rc.String(), "Controller") {
-		panic(rc.String() + " does not end in Controller")
+		return errors.New(rc.String() + " does not end in Controller")
 	}
+	return nil
+}
+
+func controllerPath(controller interface{}) string {
+	rc := reflect.TypeOf(controller)
+	return  strings.Replace(strings.ToLower(rc.Elem().Name()), "controller", "", -1)
 }

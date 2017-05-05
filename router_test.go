@@ -11,7 +11,16 @@ type mockDependency struct {
 	works string
 }
 
+type subController struct {
+
+}
+
+func (s *subController) SubAction() {
+
+}
+
 type mockController struct {
+	_ *subController
 }
 
 func (m *mockController) RouteAction() {
@@ -62,6 +71,10 @@ func TestRouter(t *testing.T) {
 
 	expectedRoutes := []string{"mock/argsroute", "mock/flippedargs", "mock/hasreturn", "mock/inject",
 		"mock/route", "mock/post"}
+
+	for _, v := range router.routes  {
+		t.Log(v.Path)
+	}
 
 	time.Sleep(time.Second)
 
