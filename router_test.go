@@ -12,7 +12,6 @@ type mockDependency struct {
 }
 
 type subController struct {
-
 }
 
 func (s *subController) SubAction() {
@@ -21,6 +20,10 @@ func (s *subController) SubAction() {
 
 type mockController struct {
 	_ *subController
+}
+
+func (m *mockController) IndexAction() {
+
 }
 
 func (m *mockController) RouteAction() {
@@ -69,10 +72,10 @@ func TestRouter(t *testing.T) {
 
 	go http.ListenAndServe(":1337", router)
 
-	expectedRoutes := []string{"mock/argsroute", "mock/flippedargs", "mock/hasreturn", "mock/inject",
-		"mock/route", "mock/post"}
+	expectedRoutes := []string{"mock", "mock/argsroute", "mock/flippedargs", "mock/hasreturn", "mock/inject",
+		"mock/route", "mock/post", "mock/sub/sub"}
 
-	for _, v := range router.routes  {
+	for _, v := range router.routes {
 		t.Log(v.Path)
 	}
 
