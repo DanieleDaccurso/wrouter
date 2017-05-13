@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"errors"
+	"regexp"
 )
 
 // Route represents one callable route
@@ -62,7 +63,6 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, h *http.Request) {
 }
 
 // PrintRoutes will print out all routes to io.Writer
-// @TODO: Print alias for *Index* Routes
 func (r *Router) PrintRoutes(writer io.Writer) {
 	for i, route := range r.routes {
 		ms := ""
@@ -98,21 +98,18 @@ func (r *Router) findRequestRoute(h *http.Request) *Route {
 	uri := strings.ToLower(strings.Trim(h.URL.RequestURI(), "?&/"))
 	uriParts := strings.Split(uri, "/")
 
+	// required full-path to match subroutes, without strict slashes
+	fullPath := strings.Trim(strings.Split(uri, "?")[0], "/")
 
-	// TODO: Find a nicer and more generic way to determine index-actions
-	// use "IndexController" if no route is specified
-	if uriParts[0] == "" {
-		uriParts[0] = "index"
-	}
-	// append index action to general controller call
-	if len(uriParts) < 2 {
-		uriParts = append(uriParts, "index")
+	path := uriParts[0]
+	if len(uriParts) > 1 {
+		// match route
+		path = uriParts[0] + "/" + uriParts[1]
 	}
 
-	// match route
-	path := uriParts[0] + "/" + uriParts[1]
+	println("path", path, "fullpath", fullPath)
 	for _, route := range r.routes {
-		if route.Path == path {
+		if route.Path == path || route.Path == fullPath {
 			// reduce complexity for routes with only one method
 			if len(route.Methods) == 1 && h.Method == route.Methods[0] {
 				return route
@@ -183,7 +180,13 @@ func (r *Router) addController(controller interface{}, prefix string) {
 
 	for i := 0; i < rc.NumMethod(); i++ {
 		route := createRouteByMethod(controller, rc, rc.Method(i), prefix)
+		alias := createAliasRoutes(route);
 		r.AddRoute(route)
+		if len(alias) != 0 {
+			for _, ar := range alias{
+				r.AddRoute(ar)
+			}
+		}
 	}
 
 	subControllers := r.getSubControllers(rc)
@@ -247,6 +250,30 @@ func createRouteByMethod(controller interface{}, rc reflect.Type, method reflect
 	}
 	r.Path = prefix + strings.Replace(strings.ToLower(rc.Elem().Name()), "controller", "", -1) + "/" + methodName
 	return r
+}
+
+func createAliasRoutes(sr *Route) []*Route {
+	var rs []*Route
+
+	if strings.Contains(sr.Path, "index") {
+		r := new(Route)
+		r.Methods = sr.Methods
+		r.Controller = sr.Controller
+		r.RMethod = sr.RMethod
+
+		nPath := strings.Replace(sr.Path, "index", "", -1)
+		rg, err := regexp.Compile(`\/+`)
+		// there is no valid reason for this to happen
+		if err != nil {
+			panic(err.Error())
+		}
+
+		r.Path = strings.Trim(rg.ReplaceAllString(nPath, "/"), "/")
+
+		rs = append(rs, r)
+	}
+
+	return rs
 }
 
 func verifyController(rc reflect.Type) error {
