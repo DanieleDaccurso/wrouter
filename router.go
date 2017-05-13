@@ -1,14 +1,14 @@
 package wrouter
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
-	"errors"
-	"regexp"
 )
 
 // Route represents one callable route
@@ -107,7 +107,6 @@ func (r *Router) findRequestRoute(h *http.Request) *Route {
 		path = uriParts[0] + "/" + uriParts[1]
 	}
 
-	println("path", path, "fullpath", fullPath)
 	for _, route := range r.routes {
 		if route.Path == path || route.Path == fullPath {
 			// reduce complexity for routes with only one method
@@ -132,19 +131,24 @@ func (r *Router) callRoute(route *Route, w http.ResponseWriter, h *http.Request)
 
 	ctx := createInjectorContext(h, route, r, w)
 
-	// Call controller method and inject arguents by reflection
-	for i := 0; i < route.RMethod.Type.NumIn(); i++ {
-		arg := route.RMethod.Type.In(i)
-		switch arg.String() {
-		case reflect.TypeOf(route.Controller).String():
-			values = append(values, reflect.ValueOf(route.Controller))
-		case "http.ResponseWriter":
-			values = append(values, reflect.ValueOf(w))
-		case "*http.Request":
-			values = append(values, reflect.ValueOf(h))
-		default:
-			// Execute dynamic injection by
-			values = append(values, reflect.ValueOf(r.inject(arg.String(), ctx)))
+	// Currently, every controller action needs to be part of a struct, therefore
+	// the first argument of the method, is the struct itself. This happens implicit
+	// when a method is defined as func (s *struct) doit()
+	values = append(values, reflect.ValueOf(route.Controller))
+
+	// argument resolving switch is only called, if a method has more than one argument
+	if route.RMethod.Type.NumIn() > 1 {
+		// Call controller method and inject arguents by reflection
+		for i := 1; i < route.RMethod.Type.NumIn(); i++ {
+			arg := route.RMethod.Type.In(i)
+			switch arg.String() {
+			case "http.ResponseWriter":
+				values = append(values, reflect.ValueOf(w))
+			case "*http.Request":
+				values = append(values, reflect.ValueOf(h))
+			default:
+				values = append(values, reflect.ValueOf(r.inject(arg.String(), ctx)))
+			}
 		}
 	}
 
@@ -180,10 +184,10 @@ func (r *Router) addController(controller interface{}, prefix string) {
 
 	for i := 0; i < rc.NumMethod(); i++ {
 		route := createRouteByMethod(controller, rc, rc.Method(i), prefix)
-		alias := createAliasRoutes(route);
+		alias := createAliasRoutes(route)
 		r.AddRoute(route)
 		if len(alias) != 0 {
-			for _, ar := range alias{
+			for _, ar := range alias {
 				r.AddRoute(ar)
 			}
 		}
@@ -262,12 +266,7 @@ func createAliasRoutes(sr *Route) []*Route {
 		r.RMethod = sr.RMethod
 
 		nPath := strings.Replace(sr.Path, "index", "", -1)
-		rg, err := regexp.Compile(`\/+`)
-		// there is no valid reason for this to happen
-		if err != nil {
-			panic(err.Error())
-		}
-
+		rg, _ := regexp.Compile(`\/+`)
 		r.Path = strings.Trim(rg.ReplaceAllString(nPath, "/"), "/")
 
 		rs = append(rs, r)
@@ -289,5 +288,5 @@ func verifyController(rc reflect.Type) error {
 
 func controllerPath(controller interface{}) string {
 	rc := reflect.TypeOf(controller)
-	return  strings.Replace(strings.ToLower(rc.Elem().Name()), "controller", "", -1)
+	return strings.Replace(strings.ToLower(rc.Elem().Name()), "controller", "", -1)
 }
