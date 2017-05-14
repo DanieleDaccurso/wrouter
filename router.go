@@ -29,8 +29,8 @@ func (r *Route) AddMethod(method string) {
 type Router struct {
 	routes      []*Route
 	injectors   []Injector
-	preRequest  []PreRequestEvent
-	postRequest []PostRequestEvent
+	preRequest  []*EventContainer
+	postRequest []*EventContainer
 }
 
 // Create a new Router
@@ -42,14 +42,7 @@ func NewRouter() *Router {
 // second parameter of http.ListenAndServe
 func (r *Router) ServeHTTP(w http.ResponseWriter, h *http.Request) {
 
-	// Execute PreRequestEvents if any
-	if len(r.preRequest) != 0 {
-		ctx := createPreRequestEventContext(h, w)
-		for _, event := range r.preRequest {
-			event.Exec(ctx)
-		}
-	}
-
+	//resolve the route before we do anything so we can inject it into each route
 	route := r.findRequestRoute(h)
 	if route == nil {
 		// @TODO: Implement check if an ErrorController exists
@@ -59,7 +52,69 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, h *http.Request) {
 		return
 	}
 
-	r.callRoute(route, w, h)
+	//Injector gets passed to all possible calls
+	injCtx := createInjectorContext(h, route, r, w)
+
+	//Make the context which is passed throughout the lifecycle of the request
+	ctx := NewContext(w, h)
+
+	// Execute PreRequestEvents if any
+	if len(r.preRequest) != 0 {
+		for _, event := range r.preRequest {
+			r.callEvent(event, ctx, injCtx)
+		}
+	}
+
+	// Call controller method and inject arguments by reflection
+	values := make([]reflect.Value, 2)
+	values[0] = reflect.ValueOf(route.Controller)
+	values[1] = reflect.ValueOf(ctx)
+	arg := route.RMethod.Type.In(route.RMethod.Type.NumIn() - 1)
+	switch arg.String() {
+	case reflect.TypeOf(route.Controller).String():
+		break
+	case "http.ResponseWriter":
+		break
+	case "*http.Request":
+		break
+	case "*wrouter.Context":
+		break
+	default:
+		// Execute dynamic injection by
+		injector := reflect.ValueOf(r.inject(arg.String(), injCtx))
+		values = append(values, injector)
+	}
+
+	ctx.results = route.RMethod.Func.Call(values)
+	// Execute PostRequest events
+	if len(r.postRequest) != 0 {
+		for _, event := range r.postRequest {
+			r.callEvent(event, ctx, injCtx)
+		}
+	}
+}
+
+func (r *Router) callEvent(event *EventContainer, ctx *Context, injCtx *InjectorContext) {
+
+	values := make([]reflect.Value, 2)
+	values[0] = reflect.ValueOf(event.Controller)
+	values[1] = reflect.ValueOf(ctx)
+	arg := event.RMethod.Type.In(event.RMethod.Type.NumIn() - 1)
+	switch arg.String() {
+	case reflect.TypeOf(event.Controller).String():
+		break
+	case "http.ResponseWriter":
+		break
+	case "*http.Request":
+		break
+	case "*wrouter.Context":
+		break
+	default:
+		// Execute dynamic injection by
+		injector := reflect.ValueOf(r.inject(arg.String(), injCtx))
+		values = append(values, injector)
+	}
+	event.RMethod.Func.Call(values)
 }
 
 // PrintRoutes will print out all routes to io.Writer
@@ -86,12 +141,22 @@ func (r *Router) AddInjector(in Injector) {
 	r.injectors = append(r.injectors, in)
 }
 
-func (r *Router) AddPreRequestEvent(ev PreRequestEvent) {
-	r.preRequest = append(r.preRequest, ev)
+func (r *Router) AddPreRequestEvent(ev interface{}) {
+	r.addEvent(ev, &r.preRequest)
 }
 
-func (r *Router) AddPostRequestEvent(ev PostRequestEvent) {
-	r.postRequest = append(r.postRequest, ev)
+func (r *Router) AddPostRequestEvent(ev interface{}) {
+	r.addEvent(ev, &r.postRequest)
+}
+
+func (r *Router) addEvent(ev interface{}, storage *[]*EventContainer) {
+	rc := reflect.TypeOf(ev)
+	method, found := rc.MethodByName("Exec")
+	if !found {
+		panic(errors.New("Event must implement method Exec"))
+	}
+	event := EventContainer{ev, method}
+	*storage = append(*storage, &event)
 }
 
 func (r *Router) findRequestRoute(h *http.Request) *Route {
@@ -124,43 +189,6 @@ func (r *Router) findRequestRoute(h *http.Request) *Route {
 	}
 
 	return nil
-}
-
-func (r *Router) callRoute(route *Route, w http.ResponseWriter, h *http.Request) {
-	values := make([]reflect.Value, 0)
-
-	ctx := createInjectorContext(h, route, r, w)
-
-	// Currently, every controller action needs to be part of a struct, therefore
-	// the first argument of the method, is the struct itself. This happens implicit
-	// when a method is defined as func (s *struct) doit()
-	values = append(values, reflect.ValueOf(route.Controller))
-
-	// argument resolving switch is only called, if a method has more than one argument
-	if route.RMethod.Type.NumIn() > 1 {
-		// Call controller method and inject arguents by reflection
-		for i := 1; i < route.RMethod.Type.NumIn(); i++ {
-			arg := route.RMethod.Type.In(i)
-			switch arg.String() {
-			case "http.ResponseWriter":
-				values = append(values, reflect.ValueOf(w))
-			case "*http.Request":
-				values = append(values, reflect.ValueOf(h))
-			default:
-				values = append(values, reflect.ValueOf(r.inject(arg.String(), ctx)))
-			}
-		}
-	}
-
-	ret := route.RMethod.Func.Call(values)
-
-	// Execute PostRequest events
-	if len(r.postRequest) != 0 {
-		ctx := createPostRequestEventContext(h, w, ret)
-		for _, event := range r.postRequest {
-			event.Exec(ctx)
-		}
-	}
 }
 
 func (r *Router) inject(t string, ctx *InjectorContext) interface{} {
@@ -276,6 +304,7 @@ func createAliasRoutes(sr *Route) []*Route {
 }
 
 func verifyController(rc reflect.Type) error {
+
 	if rc.Kind() != reflect.Ptr || rc.Elem().Kind() != reflect.Struct {
 		return errors.New(rc.String() + " is a " + rc.Kind().String() + ", pointer to Struct expected")
 	}

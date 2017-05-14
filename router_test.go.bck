@@ -54,7 +54,7 @@ type mockInjector struct {
 }
 
 func (m *mockInjector) Supports(t string) bool {
-	return t == "*wrouter.mockDependency"
+	return t == "*wrouter.tMockDependency"
 }
 
 func (m *mockInjector) Get(ctx *InjectorContext) interface{} {
