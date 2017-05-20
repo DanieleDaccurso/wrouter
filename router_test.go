@@ -22,6 +22,10 @@ type mockController struct {
 	_ *subController
 }
 
+func (m *mockController) IndexAction() {
+
+}
+
 func (m *mockController) RouteAction() {
 
 }
