@@ -1,7 +1,6 @@
 package wrouter
 
 import (
-	"errors"
 	"github.com/owtorg/events"
 	"reflect"
 	"strings"
@@ -17,17 +16,6 @@ func getHighestKey(whatever map[int]events.Event) int {
 		}
 	}
 	return highest
-}
-
-func verifyController(rc reflect.Type) error {
-	if rc.Kind() != reflect.Ptr || rc.Elem().Kind() != reflect.Struct {
-		return errors.New(rc.String() + " is a " + rc.Kind().String() + ", pointer to Struct expected")
-	}
-
-	if !strings.Contains(rc.String(), "Controller") {
-		return errors.New(rc.String() + " does not end in Controller")
-	}
-	return nil
 }
 
 func controllerPath(controller interface{}) string {

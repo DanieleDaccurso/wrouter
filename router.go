@@ -7,22 +7,27 @@ import (
 	"io"
 	"net/http"
 	"reflect"
-	"regexp"
 	"strconv"
 	"strings"
 )
 
 // Route represents one callable route
 type Route struct {
-	Methods    []string
-	Controller interface{}
-	RMethod    reflect.Method
-	Path       string
+	// Methods contains a slice of strings, identifying the allowed HTTP methods for the current route
+	Methods []string
+	// Controller contains the current Controller
+	Controller Controller
+	// RMethod contains the reflect.Method of the Controller's action to be called on the current route
+	RMethod reflect.Method
+	// Path contains the path for the current route
+	Path string
 }
 
 // EventPriorityError is returned when an Event's priority is already taken by another event.
 // Every event priority may be only given once.
 var EventPriorityError = errors.New("Event with given priority already exists")
+
+var AllowedMethods = []string{"get", "post", "put", "patch", "head", "trace", "connect", "options", "delete"}
 
 // Add an HTTP Method to the routes
 // Allowed methods: "get", "post", "put", "patch", "head", "trace", "connect", "options", "delete"
@@ -40,6 +45,10 @@ type Router struct {
 	// to those events. Use the Adder methods for both request maps for type validation
 	preRequest  map[int]events.Event
 	postRequest map[int]events.Event
+
+	// Configuration contains the router configuration
+	Configuration *Configuration
+	Resolver      RouteResolver
 }
 
 // Create a new Router
@@ -47,6 +56,8 @@ func NewRouter() *Router {
 	r := new(Router)
 	r.preRequest = make(map[int]events.Event)
 	r.postRequest = make(map[int]events.Event)
+	r.Configuration = createDefaultConfiguration()
+	r.Resolver = newRouteResolver(r.Configuration)
 	return r
 }
 
@@ -84,7 +95,15 @@ func (r *Router) PrintRoutes(writer io.Writer) {
 
 // AddController will add a new controller to the router.
 func (r *Router) AddController(controller interface{}) {
-	r.addController(controller, "")
+	routes, err := r.Resolver.Resolve(controller)
+	if err != nil {
+		panic(err)
+	}
+	if len(routes) > 0 {
+		for i := 0; i < len(routes); i++ {
+			r.AddRoute(routes[i])
+		}
+	}
 }
 
 // AddRoute will add a new Route to a controller.
@@ -212,104 +231,4 @@ func (r *Router) inject(t string, ctx *InjectorContext) interface{} {
 	}
 
 	return nil
-}
-
-func (r *Router) addController(controller interface{}, prefix string) {
-	rc := reflect.TypeOf(controller)
-	vErr := verifyController(rc)
-	if vErr != nil {
-		panic(vErr.Error())
-	}
-
-	for i := 0; i < rc.NumMethod(); i++ {
-		route := createRouteByMethod(controller, rc, rc.Method(i), prefix)
-		alias := createAliasRoutes(route)
-		r.AddRoute(route)
-		if len(alias) != 0 {
-			for _, ar := range alias {
-				r.AddRoute(ar)
-			}
-		}
-	}
-
-	subControllers := r.getSubControllers(rc)
-	if len(subControllers) != 0 {
-		newPrefix := prefix + controllerPath(controller) + "/"
-		for _, c := range subControllers {
-			r.addController(c, newPrefix)
-		}
-	}
-}
-
-func (r *Router) getSubControllers(rc reflect.Type) []interface{} {
-	var controllers []interface{}
-	fn := rc.Elem().NumField()
-	if fn == 0 {
-		return controllers
-	}
-	for i := 0; i < fn; i++ {
-		rf := rc.Elem().Field(i).Type
-		c := verifyController(rf)
-		if c == nil {
-			r := reflect.New(rf.Elem())
-			controllers = append(controllers, r.Interface())
-		}
-	}
-
-	return controllers
-}
-
-/********
- *
- *	HELPER FUNCTIONS
- *
- ********/
-func createRouteByMethod(controller interface{}, rc reflect.Type, method reflect.Method, prefix string) *Route {
-	r := new(Route)
-	methodName := strings.ToLower(method.Name)
-	r.Controller = controller
-	r.RMethod = method
-
-	// Add HTTP methods
-	if strings.Contains(methodName, "_") {
-		var allowed []string = []string{"get", "post", "put", "patch", "head", "trace",
-			"connect", "options", "delete"}
-		methodParts := strings.Split(methodName, "_")
-		methodString := methodParts[0]
-		methodName = methodParts[1]
-		for _, method := range allowed {
-			if strings.Contains(methodString, method) {
-				r.AddMethod(strings.ToUpper(method))
-			}
-		}
-	}
-	if len(r.Methods) == 0 {
-		r.AddMethod("GET")
-	}
-
-	// Calculate path
-	if strings.Contains(methodName, "action") {
-		methodName = strings.Replace(methodName, "action", "", -1)
-	}
-	r.Path = prefix + strings.Replace(strings.ToLower(rc.Elem().Name()), "controller", "", -1) + "/" + methodName
-	return r
-}
-
-func createAliasRoutes(sr *Route) []*Route {
-	var rs []*Route
-
-	if strings.Contains(sr.Path, "index") {
-		r := new(Route)
-		r.Methods = sr.Methods
-		r.Controller = sr.Controller
-		r.RMethod = sr.RMethod
-
-		nPath := strings.Replace(sr.Path, "index", "", -1)
-		rg, _ := regexp.Compile(`\/+`)
-		r.Path = strings.Trim(rg.ReplaceAllString(nPath, "/"), "/")
-
-		rs = append(rs, r)
-	}
-
-	return rs
 }
