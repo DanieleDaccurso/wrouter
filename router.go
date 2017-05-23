@@ -2,13 +2,13 @@ package wrouter
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
+	"github.com/owtorg/clitable"
 )
 
 // Route represents one callable route
@@ -64,13 +64,16 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, h *http.Request) {
 
 // PrintRoutes will print out all routes to io.Writer
 func (r *Router) PrintRoutes(writer io.Writer) {
+	t := clitable.New()
+	t.AddRow("ID", "METHODS", "PATH")
 	for i, route := range r.routes {
 		ms := ""
 		for _, me := range route.Methods {
 			ms += me + " "
 		}
-		fmt.Fprintln(writer, "ID: "+strconv.Itoa(i)+"\t"+ms+"\t\t"+route.Path)
+		t.AddRow(strconv.Itoa(i), ms ,route.Path)
 	}
+	t.Fprint(writer)
 }
 
 // AddController will add a new controller to the router
