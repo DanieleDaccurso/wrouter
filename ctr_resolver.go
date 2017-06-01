@@ -60,8 +60,6 @@ func (rs *ctrRouteResolver) verifyController(rct ReflectController) error {
 	}
 
 	// Assert that the given controller name ends in Controller
-	// @TODO this was necessary to handle route generation in earlier versions, still necessary?
-	// (subject to discussion)
 	if !strings.Contains(rct.String(), "Controller") {
 		return WrongTypeError
 	}

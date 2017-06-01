@@ -1,31 +1,16 @@
 package wrouter
 
 import (
-	"errors"
+	"github.com/owtorg/clitable"
 	"github.com/owtorg/events"
 	"io"
 	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
-	"github.com/owtorg/clitable"
 )
 
-// Route represents one callable route
-type Route struct {
-	// Methods contains a slice of strings, identifying the allowed HTTP methods for the current route
-	Methods []string
-	// Controller contains the current Controller
-	Controller Controller
-	// RMethod contains the reflect.Method of the Controller's action to be called on the current route
-	RMethod reflect.Method
-	// Path contains the path for the current route
-	Path string
-}
 
-// EventPriorityError is returned when an Event's priority is already taken by another event.
-// Every event priority may be only given once.
-var EventPriorityError = errors.New("Event with given priority already exists")
 
 var AllowedMethods = []string{"get", "post", "put", "patch", "head", "trace", "connect", "options", "delete"}
 
@@ -40,11 +25,10 @@ type Router struct {
 	routes    []*Route
 	injectors []Injector
 
-	// The event-dispatcher requires a map[int]interface{} in order to act generically.
-	// Please do not modify this to the exact types. Also do not attach whatever interface{}
-	// to those events. Use the Adder methods for both request maps for type validation
-	preRequest  map[int]events.Event
-	postRequest map[int]events.Event
+	// Eventcollections
+	// See: github.com/owtorg/events
+	preRequest  *events.EventCollection
+	postRequest *events.EventCollection
 
 	// Configuration contains the router configuration
 	Configuration *Configuration
@@ -54,8 +38,8 @@ type Router struct {
 // Create a new Router
 func NewRouter() *Router {
 	r := new(Router)
-	r.preRequest = make(map[int]events.Event)
-	r.postRequest = make(map[int]events.Event)
+	r.preRequest = new(events.EventCollection)
+	r.postRequest = new(events.EventCollection)
 	r.Configuration = createDefaultConfiguration()
 	r.Resolver = newRouteResolver(r.Configuration)
 	return r
@@ -65,7 +49,7 @@ func NewRouter() *Router {
 // second parameter of http.ListenAndServe
 func (r *Router) ServeHTTP(w http.ResponseWriter, h *http.Request) {
 	// Execute PreRequestEvents if any
-	if len(r.preRequest) != 0 {
+	if r.preRequest.Len() != 0 {
 		ctx := createPreRequestEventContext(h, w)
 		events.DispatchEvents(r.preRequest, ctx)
 	}
@@ -91,7 +75,7 @@ func (r *Router) PrintRoutes(writer io.Writer) {
 		for _, me := range route.Methods {
 			ms += me + " "
 		}
-		t.AddRow(strconv.Itoa(i), ms ,route.Path)
+		t.AddRow(strconv.Itoa(i), ms, route.Path)
 	}
 	t.Fprint(writer)
 }
@@ -123,38 +107,26 @@ func (r *Router) AddInjector(in Injector) {
 
 // AddPreRequestEvent will add a PreRequestEvent with a given priority. It will return an error
 // if the selected priority is already taken.
-func (r *Router) AddPreRequestEvent(ev PreRequestEvent, priority int) error {
-	_, exists := r.preRequest[priority]
-	if exists {
-		return EventPriorityError
-	}
-	r.preRequest[priority] = ev
-	return nil
+func (r *Router) AddPreRequestEvent(ev PreRequestEvent, priority uint) {
+	r.preRequest.AddEvent(ev, priority)
 }
 
 // AddPostRequestEvent will add a PostRequestEvent with a given priority. It will return an error
 // if the selected priority is already taken.
-func (r *Router) AddPostRequestEvent(ev PostRequestEvent, priority int) error {
-	_, exists := r.postRequest[priority]
-	if exists {
-		return EventPriorityError
-	}
-	r.postRequest[priority] = ev
-	return nil
+func (r *Router) AddPostRequestEvent(ev PostRequestEvent, priority uint) {
+	r.postRequest.AddEvent(ev, priority)
 }
 
 // AppendPreRequestEvent will append a PreRequestEvent at the end of the current PreRequestEvent
 // queue. If you want to set a priority, see AddPreRequestEvent
 func (r *Router) AppendPreRequestEvent(ev PreRequestEvent) {
-	key := getHighestKey(r.preRequest) + 1
-	r.preRequest[key] = ev
+	r.postRequest.AppendEvent(ev)
 }
 
 // AppendPostRequestEvent will append a PreRequestEvent at the end of the current AddPostRequestEvent
 // queue. If you want to set a priority, see AddPostRequestEvent
 func (r *Router) AppendPostRequestEvent(ev PostRequestEvent) {
-	key := getHighestKey(r.postRequest) + 1
-	r.postRequest[key] = ev
+	r.postRequest.AppendEvent(ev)
 }
 
 func (r *Router) findRequestRoute(h *http.Request) *Route {
@@ -218,7 +190,7 @@ func (r *Router) callRoute(route *Route, w http.ResponseWriter, h *http.Request)
 	ret := route.RMethod.Func.Call(values)
 
 	// Execute PostRequest events
-	if len(r.postRequest) != 0 {
+	if r.postRequest.Len() != 0 {
 		ctx := createPostRequestEventContext(h, w, ret)
 		events.DispatchEvents(r.postRequest, ctx)
 	}
