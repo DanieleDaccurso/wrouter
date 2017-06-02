@@ -18,6 +18,8 @@ func createInjectorContext(request *http.Request, route *Route, router *Router, 
 	}
 }
 
+// Injector is the default API to provide values in controller actions. The implementation is executed on every request
+// which requires a value to be injected. If the implementation returns true on support, Get will be executed.
 type Injector interface {
 	Supports(string) bool
 	Get(*InjectorContext) interface{}

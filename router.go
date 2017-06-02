@@ -1,23 +1,18 @@
 package wrouter
 
 import (
-	"errors"
+	"github.com/owtorg/clitable"
+	"github.com/owtorg/events"
 	"io"
 	"net/http"
 	"reflect"
-	"regexp"
 	"strconv"
 	"strings"
-	"github.com/owtorg/clitable"
 )
 
-// Route represents one callable route
-type Route struct {
-	Methods    []string
-	Controller interface{}
-	RMethod    reflect.Method
-	Path       string
-}
+
+
+var AllowedMethods = []string{"get", "post", "put", "patch", "head", "trace", "connect", "options", "delete"}
 
 // Add an HTTP Method to the routes
 // Allowed methods: "get", "post", "put", "patch", "head", "trace", "connect", "options", "delete"
@@ -27,27 +22,36 @@ func (r *Route) AddMethod(method string) {
 
 // Router represents one implementation of the http.Handler interface
 type Router struct {
-	routes      []*Route
-	injectors   []Injector
-	preRequest  []PreRequestEvent
-	postRequest []PostRequestEvent
+	routes    []*Route
+	injectors []Injector
+
+	// Eventcollections
+	// See: github.com/owtorg/events
+	preRequest  *events.EventCollection
+	postRequest *events.EventCollection
+
+	// Configuration contains the router configuration
+	Configuration *Configuration
+	Resolver      RouteResolver
 }
 
 // Create a new Router
 func NewRouter() *Router {
-	return &Router{}
+	r := new(Router)
+	r.preRequest = new(events.EventCollection)
+	r.postRequest = new(events.EventCollection)
+	r.Configuration = createDefaultConfiguration()
+	r.Resolver = newRouteResolver(r.Configuration)
+	return r
 }
 
 // ServeHTTP satisfies the http.Handler interface, so that this Router can be used as the
 // second parameter of http.ListenAndServe
 func (r *Router) ServeHTTP(w http.ResponseWriter, h *http.Request) {
-
 	// Execute PreRequestEvents if any
-	if len(r.preRequest) != 0 {
+	if r.preRequest.Len() != 0 {
 		ctx := createPreRequestEventContext(h, w)
-		for _, event := range r.preRequest {
-			event.Exec(ctx)
-		}
+		events.DispatchEvents(r.preRequest, ctx)
 	}
 
 	route := r.findRequestRoute(h)
@@ -71,30 +75,58 @@ func (r *Router) PrintRoutes(writer io.Writer) {
 		for _, me := range route.Methods {
 			ms += me + " "
 		}
-		t.AddRow(strconv.Itoa(i), ms ,route.Path)
+		t.AddRow(strconv.Itoa(i), ms, route.Path)
 	}
 	t.Fprint(writer)
 }
 
-// AddController will add a new controller to the router
+// AddController will add a new controller to the router.
 func (r *Router) AddController(controller interface{}) {
-	r.addController(controller, "")
+	routes, err := r.Resolver.Resolve(controller)
+	if err != nil {
+		panic(err)
+	}
+	if len(routes) > 0 {
+		for i := 0; i < len(routes); i++ {
+			r.AddRoute(routes[i])
+		}
+	}
 }
 
+// AddRoute will add a new Route to a controller.
 func (r *Router) AddRoute(route *Route) {
 	r.routes = append(r.routes, route)
 }
 
+// AddInjector will append an Injector to the list of Injectors in this router.
+// It will automatically be the last executed injector as the first injector to support a certain
+// type, will be the one who serves the value.
 func (r *Router) AddInjector(in Injector) {
 	r.injectors = append(r.injectors, in)
 }
 
-func (r *Router) AddPreRequestEvent(ev PreRequestEvent) {
-	r.preRequest = append(r.preRequest, ev)
+// AddPreRequestEvent will add a PreRequestEvent with a given priority. It will return an error
+// if the selected priority is already taken.
+func (r *Router) AddPreRequestEvent(ev PreRequestEvent, priority uint) {
+	r.preRequest.AddEvent(ev, priority)
 }
 
-func (r *Router) AddPostRequestEvent(ev PostRequestEvent) {
-	r.postRequest = append(r.postRequest, ev)
+// AddPostRequestEvent will add a PostRequestEvent with a given priority. It will return an error
+// if the selected priority is already taken.
+func (r *Router) AddPostRequestEvent(ev PostRequestEvent, priority uint) {
+	r.postRequest.AddEvent(ev, priority)
+}
+
+// AppendPreRequestEvent will append a PreRequestEvent at the end of the current PreRequestEvent
+// queue. If you want to set a priority, see AddPreRequestEvent
+func (r *Router) AppendPreRequestEvent(ev PreRequestEvent) {
+	r.postRequest.AppendEvent(ev)
+}
+
+// AppendPostRequestEvent will append a PreRequestEvent at the end of the current AddPostRequestEvent
+// queue. If you want to set a priority, see AddPostRequestEvent
+func (r *Router) AppendPostRequestEvent(ev PostRequestEvent) {
+	r.postRequest.AppendEvent(ev)
 }
 
 func (r *Router) findRequestRoute(h *http.Request) *Route {
@@ -158,11 +190,9 @@ func (r *Router) callRoute(route *Route, w http.ResponseWriter, h *http.Request)
 	ret := route.RMethod.Func.Call(values)
 
 	// Execute PostRequest events
-	if len(r.postRequest) != 0 {
+	if r.postRequest.Len() != 0 {
 		ctx := createPostRequestEventContext(h, w, ret)
-		for _, event := range r.postRequest {
-			event.Exec(ctx)
-		}
+		events.DispatchEvents(r.postRequest, ctx)
 	}
 }
 
@@ -176,120 +206,4 @@ func (r *Router) inject(t string, ctx *InjectorContext) interface{} {
 	}
 
 	return nil
-}
-
-func (r *Router) addController(controller interface{}, prefix string) {
-	rc := reflect.TypeOf(controller)
-	vErr := verifyController(rc)
-	if vErr != nil {
-		panic(vErr.Error())
-	}
-
-	for i := 0; i < rc.NumMethod(); i++ {
-		route := createRouteByMethod(controller, rc, rc.Method(i), prefix)
-		alias := createAliasRoutes(route)
-		r.AddRoute(route)
-		if len(alias) != 0 {
-			for _, ar := range alias {
-				r.AddRoute(ar)
-			}
-		}
-	}
-
-	subControllers := r.getSubControllers(rc)
-	if len(subControllers) != 0 {
-		newPrefix := prefix + controllerPath(controller) + "/"
-		for _, c := range subControllers {
-			r.addController(c, newPrefix)
-		}
-	}
-}
-
-func (r *Router) getSubControllers(rc reflect.Type) []interface{} {
-	var controllers []interface{}
-	fn := rc.Elem().NumField()
-	if fn == 0 {
-		return controllers
-	}
-	for i := 0; i < fn; i++ {
-		rf := rc.Elem().Field(i).Type
-		c := verifyController(rf)
-		if c == nil {
-			r := reflect.New(rf.Elem())
-			controllers = append(controllers, r.Interface())
-		}
-	}
-
-	return controllers
-}
-
-/********
- *
- *	HELPER FUNCTIONS
- *
- ********/
-func createRouteByMethod(controller interface{}, rc reflect.Type, method reflect.Method, prefix string) *Route {
-	r := new(Route)
-	methodName := strings.ToLower(method.Name)
-	r.Controller = controller
-	r.RMethod = method
-
-	// Add HTTP methods
-	if strings.Contains(methodName, "_") {
-		var allowed []string = []string{"get", "post", "put", "patch", "head", "trace",
-			"connect", "options", "delete"}
-		methodParts := strings.Split(methodName, "_")
-		methodString := methodParts[0]
-		methodName = methodParts[1]
-		for _, method := range allowed {
-			if strings.Contains(methodString, method) {
-				r.AddMethod(strings.ToUpper(method))
-			}
-		}
-	}
-	if len(r.Methods) == 0 {
-		r.AddMethod("GET")
-	}
-
-	// Calculate path
-	if strings.Contains(methodName, "action") {
-		methodName = strings.Replace(methodName, "action", "", -1)
-	}
-	r.Path = prefix + strings.Replace(strings.ToLower(rc.Elem().Name()), "controller", "", -1) + "/" + methodName
-	return r
-}
-
-func createAliasRoutes(sr *Route) []*Route {
-	var rs []*Route
-
-	if strings.Contains(sr.Path, "index") {
-		r := new(Route)
-		r.Methods = sr.Methods
-		r.Controller = sr.Controller
-		r.RMethod = sr.RMethod
-
-		nPath := strings.Replace(sr.Path, "index", "", -1)
-		rg, _ := regexp.Compile(`\/+`)
-		r.Path = strings.Trim(rg.ReplaceAllString(nPath, "/"), "/")
-
-		rs = append(rs, r)
-	}
-
-	return rs
-}
-
-func verifyController(rc reflect.Type) error {
-	if rc.Kind() != reflect.Ptr || rc.Elem().Kind() != reflect.Struct {
-		return errors.New(rc.String() + " is a " + rc.Kind().String() + ", pointer to Struct expected")
-	}
-
-	if !strings.Contains(rc.String(), "Controller") {
-		return errors.New(rc.String() + " does not end in Controller")
-	}
-	return nil
-}
-
-func controllerPath(controller interface{}) string {
-	rc := reflect.TypeOf(controller)
-	return strings.Replace(strings.ToLower(rc.Elem().Name()), "controller", "", -1)
 }

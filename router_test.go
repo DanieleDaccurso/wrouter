@@ -72,8 +72,8 @@ func TestRouter(t *testing.T) {
 
 	go http.ListenAndServe(":1337", router)
 
-	expectedRoutes := []string{"mock", "mock/argsroute", "mock/flippedargs", "mock/hasreturn", "mock/inject",
-		"mock/route", "mock/post", "mock/sub/sub"}
+	expectedRoutes := []string{"mock/sub/sub", "mock/argsroute", "mock/flippedargs", "mock/hasreturn", "mock/inject",
+		"mock/route", "mock/post"}
 
 	for _, v := range router.routes {
 		t.Log(v.Path)
