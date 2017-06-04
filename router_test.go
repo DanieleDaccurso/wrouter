@@ -1,110 +1,48 @@
 package wrouter
 
 import (
-	"bytes"
-	"net/http"
 	"testing"
-	"time"
+	"strconv"
 )
 
-type mockDependency struct {
-	works string
+var tMockCtrA string = "notDone"
+var tMockCtrB string = "notDone"
+
+type tMockController struct{ _ *tSubController }
+type tSubController struct{}
+
+func (t *tMockController) IndexAction()      {}
+func (t *tMockController) Post_IndexAction() {}
+func (t *tMockController) AnotherAction()    {}
+func (t *tSubController) SubAction()         {}
+func (t *tSubController) Delete_UserAction() {}
+
+type tMockDependency struct{ c int }
+type tMockDependencyInjector struct{}
+
+func (t *tMockDependencyInjector) Supports(te string) bool { return te == "*wrouter.tMockDependency" }
+func (t *tMockDependencyInjector) Get(ctx *InjectorContext) interface{} {
+	return &tMockDependency{c: 15}
 }
 
-type subController struct {
-}
+type tMockPreRequestEvent struct{}
+type tMockPostRequestEvent struct{}
 
-func (s *subController) SubAction() {
-
-}
-
-type mockController struct {
-	_ *subController
-}
-
-func (m *mockController) IndexAction() {
-
-}
-
-func (m *mockController) RouteAction() {
-
-}
-
-func (m *mockController) ArgsrouteAction(h *http.Request, w http.ResponseWriter) {
-
-}
-
-func (m *mockController) FlippedargsAction(w http.ResponseWriter, h *http.Request) {
-
-}
-
-func (m *mockController) HasreturnAction() string {
-	return "hello :)"
-}
-
-func (m *mockController) InjectAction(dep *mockDependency) {
-
-}
-
-func (m *mockController) POST_postAction() {
-
-}
-
-type mockInjector struct {
-}
-
-func (m *mockInjector) Supports(t string) bool {
-	return t == "*wrouter.mockDependency"
-}
-
-func (m *mockInjector) Get(ctx *InjectorContext) interface{} {
-	return &mockDependency{}
-}
+func (t *tMockPreRequestEvent) Exec(ctx *PreRequestEventContext)   { tMockCtrA = "done" }
+func (t *tMockPostRequestEvent) Exec(ctx *PostRequestEventContext) { tMockCtrB = "done" }
 
 func TestRouter(t *testing.T) {
-	router := NewRouter()
-	if router == nil {
-		t.Error("NewRouter returned nil")
+	rt := NewRouter()
+
+	rt.AddController(&tMockController{})
+
+	if len(rt.routes) != 7 {
+		t.Error("Error counting generated routes. Exptected 7, got "+strconv.Itoa(len(rt.routes))+". Please" +
+			"Consider checking the generation of aliasses for the index-Actions")
 	}
 
-	router.AddController(new(mockController))
-	router.AddInjector(new(mockInjector))
+	rt.AppendPreRequestEvent(new(tMockPreRequestEvent))
+	rt.AppendPostRequestEvent(new(tMockPostRequestEvent))
 
-	go http.ListenAndServe(":1337", router)
 
-	expectedRoutes := []string{"mock/sub/sub", "mock/argsroute", "mock/flippedargs", "mock/hasreturn", "mock/inject",
-		"mock/route", "mock/post"}
-
-	for _, v := range router.routes {
-		t.Log(v.Path)
-	}
-
-	time.Sleep(time.Second)
-
-	for _, req := range expectedRoutes {
-		resp, err := http.Get("http://127.0.0.1:1337/" + req)
-		if err != nil {
-			t.Error(err.Error())
-		}
-		if req != "mock/post" {
-			if resp.Status != "200 OK" {
-				t.Error("Route failed to return 200: " + req + ", returned: " + resp.Status)
-			}
-		} else {
-			if resp.Status != "404 Not Found" {
-				t.Error("POST route should have been 404 on GET request")
-			}
-		}
-
-		if req == "mock/post" {
-			var b bytes.Buffer
-			resp, err := http.Post("http://127.0.0.1:1337/mock/post", "text/html", &b)
-			if err != nil {
-				t.Error("fail for POST request: " + err.Error())
-			}
-			if resp.Status != "200 OK" {
-				t.Error("POST request is " + resp.Status)
-			}
-		}
-	}
 }
