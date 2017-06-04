@@ -7,10 +7,7 @@ import (
 	"net/http"
 	"reflect"
 	"strconv"
-	"strings"
 )
-
-
 
 var AllowedMethods = []string{"get", "post", "put", "patch", "head", "trace", "connect", "options", "delete"}
 
@@ -31,8 +28,9 @@ type Router struct {
 	postRequest *events.EventCollection
 
 	// Configuration contains the router configuration
-	Configuration *Configuration
-	Resolver      RouteResolver
+	Configuration   *Configuration
+	RouteResolver   RouteResolver
+	RequestResolver RequestResolver
 }
 
 // Create a new Router
@@ -41,7 +39,8 @@ func NewRouter() *Router {
 	r.preRequest = new(events.EventCollection)
 	r.postRequest = new(events.EventCollection)
 	r.Configuration = createDefaultConfiguration()
-	r.Resolver = newRouteResolver(r.Configuration)
+	r.RouteResolver = newRouteResolver(r.Configuration)
+	r.RequestResolver = newRqResolver(r)
 	return r
 }
 
@@ -82,7 +81,7 @@ func (r *Router) PrintRoutes(writer io.Writer) {
 
 // AddController will add a new controller to the router.
 func (r *Router) AddController(controller interface{}) {
-	routes, err := r.Resolver.Resolve(controller)
+	routes, err := r.RouteResolver.Resolve(controller)
 	if err != nil {
 		panic(err)
 	}
@@ -130,35 +129,7 @@ func (r *Router) AppendPostRequestEvent(ev PostRequestEvent) {
 }
 
 func (r *Router) findRequestRoute(h *http.Request) *Route {
-	uri := strings.ToLower(strings.Trim(h.URL.RequestURI(), "?&/"))
-	uriParts := strings.Split(uri, "/")
-
-	// required full-path to match subroutes, without strict slashes
-	fullPath := strings.Trim(strings.Split(uri, "?")[0], "/")
-
-	path := uriParts[0]
-	if len(uriParts) > 1 {
-		// match route
-		path = uriParts[0] + "/" + uriParts[1]
-	}
-
-	for _, route := range r.routes {
-		if route.Path == path || route.Path == fullPath {
-			// reduce complexity for routes with only one method
-			if len(route.Methods) == 1 && h.Method == route.Methods[0] {
-				return route
-			}
-
-			// iterate methods for routes with multiple methods
-			for _, me := range route.Methods {
-				if me == h.Method {
-					return route
-				}
-			}
-		}
-	}
-
-	return nil
+	return r.RequestResolver.Resolve(h)
 }
 
 func (r *Router) callRoute(route *Route, w http.ResponseWriter, h *http.Request) {
