@@ -119,7 +119,7 @@ func (r *Router) AddPostRequestEvent(ev PostRequestEvent, priority uint) {
 // AppendPreRequestEvent will append a PreRequestEvent at the end of the current PreRequestEvent
 // queue. If you want to set a priority, see AddPreRequestEvent
 func (r *Router) AppendPreRequestEvent(ev PreRequestEvent) {
-	r.postRequest.AppendEvent(ev)
+	r.preRequest.AppendEvent(ev)
 }
 
 // AppendPostRequestEvent will append a PreRequestEvent at the end of the current AddPostRequestEvent
