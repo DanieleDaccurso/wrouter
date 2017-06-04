@@ -44,8 +44,7 @@ func (r *rqResolver) Resolve(request *http.Request) *Route {
 	uri := strings.ToLower(strings.Trim(request.URL.RequestURI(), "?&/"))
 	uriParts := strings.Split(uri, "/")
 	fullPath := strings.Trim(strings.Split(uri, "?")[0], "/")
-	cachePath := request.Method+"__"+fullPath
-
+	cachePath := request.Method + "__" + fullPath
 	cachedRoute := r.cache.get(cachePath)
 	if cachedRoute != nil {
 		return cachedRoute
